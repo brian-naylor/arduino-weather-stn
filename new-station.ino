@@ -1,7 +1,7 @@
 /*
   New Weather Station - Arduino code
-  Version:  3.0.526 alpha
-  Date:     26th May, 2020
+  Version:  3.0.529 beta
+  Date:     29th May, 2020
   Author:   Brian Naylor
   Source:   (to be posted) https://github.com/brian.naylor/arduino/weather-station
 
@@ -45,7 +45,7 @@
 #define LED 2
 
 // globals
-#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.526 OTA -----------------"
+#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.529 OTA -----------------"
 #define NameAP      "WindStationAP"
 #define PasswordAP  "87654321"
 int wifiRetries = 10;             // number of times to retry wifi reconnection
@@ -64,7 +64,7 @@ char mqtt_pass[20] = "WUsOsaQhianC";
 char wind_correction[4] = "100";                            // wind correction 1-999%
 char windguru_uid[30] = "WG_MKSC_UK";                       // WindGuru user id
 char windguru_pass[20] = "259#Nay4Who";                     // WindGuru password
-char windguru_upload[4] = "ON";                             // Uploads to WindGuru, either ON or OFF
+char windguru_upload[4] = "OFF";                             // Uploads to WindGuru, either ON or OFF
 char vaneMaxADC[5] = "1024";                                // ADC range for input voltage 0..1V
 char vaneOffset[4] = "0";                                   // define the offset for caclulating wind direction from magnetic north
 char owApiKey[34] = "cc7d2795579e3f511f0c6abde97ea100";     // API key for openweathermap
@@ -73,20 +73,20 @@ char owLong[10] = "-0.7028";                                // Longtitude for op
 int ELEVATION = 65;                                         // Height of your weather station above sea level (in meters)
 
 // MQTT topic definitions & globals
-#define MQTT_TOPIC      "mkscnewstn"        // mqtt topic (Must be unique for each device)
-#define MQTT_TOPICc     "mkscnewstn/c"      // wind correction for speed calibration
-#define MQTT_TOPICv     "mkscnewstn/v"      // vane offset for direction calibration
-#define MQTT_TOPICw     "mkscnewstn/w"      // wind source - either device/probe or Internet
-#define MQTT_TOPICt     "mkscnewstn/t"      // temp source - either device/probe or Internet
-#define MQTT_TOPICp     "mkscnewstn/p"      // pressure source - either device/probe or Internet
-#define MQTT_TOPICu     "mkscnewstn/u"      // upload readings to WindGuru - on or off
-#define MQTT_TOPICf     "mkscnewstn/f"      // flash Arduino with new code.
-#define MQTT_TOPICr     "mkscnewstn/r"      // reset / reboot Arduino
-#define MQTT_TOPICd     "mkscnewstn/d"      // debugging level sent to MQTT
+#define MQTT_TOPIC      "mkscwgstn"        // mqtt topic (Must be unique for each device)
+#define MQTT_TOPICc     "mkscwgstn/c"      // wind correction for speed calibration
+#define MQTT_TOPICv     "mkscwgstn/v"      // vane offset for direction calibration
+#define MQTT_TOPICw     "mkscwgstn/w"      // wind source - either device/probe or Internet
+#define MQTT_TOPICt     "mkscwgstn/t"      // temp source - either device/probe or Internet
+#define MQTT_TOPICp     "mkscwgstn/p"      // pressure source - either device/probe or Internet
+#define MQTT_TOPICu     "mkscwgstn/u"      // upload readings to WindGuru - on or off
+#define MQTT_TOPICf     "mkscwgstn/f"      // flash Arduino with new code.
+#define MQTT_TOPICr     "mkscwgstn/r"      // reset / reboot Arduino
+#define MQTT_TOPICd     "mkscwgstn/d"      // debugging level sent to MQTT
 
 //Variables to hold good/true weather metrics and variables from open weather.
 float temperature = 0, pressure = 0, humidity = 0, mslp = 0;
-float owTemp = 0, owPressure = 0, owHumidity = 0, owWindAvg = 0, owWindMax = 0, owWindMin = 0;
+float owTemp = 0, owPressure = 0, owHumidity = 0, owWindAvg = 0, owWindMax = 0;
 float windAvg = 0, windMax = 0, windMin = 999, windTot = 0;
 int direction = 0, owDirection = 0;
 
@@ -100,14 +100,16 @@ int sourceHumidity = 0;                     // 0 = BME280 (default); 1 = OpenWea
 
 // Timer Variables and wind counters
 volatile unsigned long rotations;           // cup rotation counter used in interrupt routine
+volatile unsigned long totRotations;        // aggregated cup rotation counter used in interrupt routine
 volatile unsigned long contactBounceTime;   // Timer to avoid contact bounce in isr
 unsigned long timerCount;                   // counter to track elapsed millisecs
-unsigned long davisUpdateFreq = 3;          // update frequency to sample wind from Davis Anemometer (in seconds)
+unsigned long davisUpdateFreq = 5;          // update frequency to sample wind from Davis Anemometer (in seconds)
 unsigned long wgUpdateFreq = 60;            // update interval in seconds for WindGuru (UPLOAD) (in seconds)
 unsigned long wgUpdateCounter = 0;          // counter to track progress against update interval for WindGuru
 unsigned long owUpdateFreq = 5;             // update interval in minutes for OpenWeather API (DOWNLOAD)  (in minutes)
 unsigned long owUpdateCounter = 99;         // counter to track progress against update interval
 float windSpeed;                            // speed miles per hour
+float correction;                           // Correction factor applied to wind speed for adjustment
 
 
 // Debugging variable
@@ -143,6 +145,7 @@ void callback(const MQTT::Publish& pub) {
   {
     Serial.println("Wind correction MQTT received : " + payload);
     strcpy(wind_correction, payload.c_str());
+    correction = (float) atoi(wind_correction) / 100.0;       // Convert % wind_correction into fraction
   } // endif wind_correction
 
   if (pub.topic() == MQTT_TOPICv ) // vane offset
@@ -551,6 +554,8 @@ void setupSensors()
   timerCount = millis();
   wgUpdateCounter = millis();
   rotations = 0;    // Set Rotations to 0 ready for calculations
+  totRotations = 0;
+  correction = (float) atoi(wind_correction) / 100.0;       // Convert % wind_correction into fraction
   pinMode(WindSensorPin, INPUT);
 
   //call windcount() when interupt on WindSensorPin fires.  Increaments 'rotation' counter.
@@ -665,25 +670,23 @@ void getWindSpeed()
   switch (sourceWind) {
     case 0: //  Davis anemometer
       Serial.println("sourceWind 0 :"+String(windAvg));
-      if (windMin == windMax) // suspect reading, so use OpenWeather instead
-      {
-        windMin = owWindMin;
-        windAvg = owWindAvg;
-        windMax = owWindMax;
-        Serial.println("sourceWind 0 (backup) :"+String(windAvg));
-      }
+      //if (windMin == windMax) // suspect reading, so use OpenWeather instead
+      //{
+      //  windAvg = owWindAvg;
+      //  windMax = owWindMax;
+      //  Serial.println("sourceWind 0 (backup) :"+String(windAvg));
+      //owWindMin}
       break;
     case 1: //  OpenWeather
       Serial.println("sourceWind 1 :"+String(windAvg));
-      windMin = owWindMin;
       windAvg = owWindAvg;
       windMax = owWindMax;
       break;
   }
   if (debugLevel > 0)
   {
-    Serial.println("Wind=" + String(windMin,2) + " << " + String(windAvg,2) + " >> " + String(windMax,2) + " knots");
-    if (debugLevel > 1)  sendMQTTmsg(MQTT_TOPIC"/debug", "Wind=" + String(windMin,2) + " << " + String(windAvg,2) + " >> " + String(windMax,2) + " knots");
+    Serial.println("Wind=" + String(windMin,2) + " << " + String(windAvg,2) + " >> " + String(windMax,2) + " knots, Rtot=" + String(totRotations));
+    if (debugLevel > 1)  sendMQTTmsg(MQTT_TOPIC"/debug", "Wind=" + String(windMin,2) + " << " + String(windAvg,2) + " >> " + String(windMax,2) + " knots, Rtot=" + String(totRotations));
   }
 }
 
@@ -704,25 +707,30 @@ void getSensors()
 // (a) Get the wind readings and (b) determine if it is time to sample sensors and (c) send report
 void timedTasks()
 {
-  float _elapsedMS, _windFactor, _correction;
+  float _windFactor, _elapsedMS;
+  unsigned long _ms;
   String _logMsg;
 
-  if ((millis() > timerCount + (davisUpdateFreq * 1000)) || (millis() < timerCount ))
+  _ms = millis(); //get the current time now in milli-secs
+
+  if ((_ms > timerCount + (davisUpdateFreq * 1000)) || (_ms < timerCount ))
   {
     // time to calculate wind speed from the rotations in the davisUpdateFreq period
-    _elapsedMS = millis() - timerCount;        // How much time has elapsed since last reading
-    timerCount = millis();
+    _elapsedMS = _ms - timerCount;        // How much time has elapsed since last reading
+    timerCount = _ms;
+
+    Serial.println("Millis: "+String(_elapsedMS) + " timerCount: " + String(timerCount));   //MORE DEBUG
 
     // convert to mp/h using the formula V=P(2.25/T)
     _windFactor = 2250 / _elapsedMS;
-    _correction = (float) atoi(wind_correction) / 100.0;       // Convert % wind_correction into fraction
-    windSpeed = getKnots(rotations * _windFactor * _correction);
+    windSpeed = getKnots(rotations * _windFactor * correction);
+    totRotations = totRotations + rotations ;
     setWindRange(windSpeed); // calculate min and max variance in wind
-    _logMsg = "R=" + String(rotations);
+    _logMsg = "R=" + String(rotations) + "/" + String(totRotations) ;
     rotations = 0; // Reset count for next sample
     if (debugLevel > 0)
     {
-      _logMsg = _logMsg + " in " + String((_elapsedMS / 1000), 2) + " secs " + " W=" + String(windSpeed,2) + "knots @ " + String((_correction*100),2) + "%";
+      _logMsg = _logMsg + " in " + String((_elapsedMS / 1000), 2) + " secs " + " W=" + String(windSpeed,2) + "knots @ " + String((correction*100),2) + "%";
       Serial.println(_logMsg);
       if (debugLevel > 1)  sendMQTTmsg(MQTT_TOPIC"/debug", _logMsg);
     }
@@ -738,17 +746,18 @@ void timedTasks()
 
   }   // endif millis > sampling period
 
-  if ((millis() > wgUpdateCounter + (wgUpdateFreq * 1000)) || (millis() < wgUpdateCounter ))
+  if ((_ms > wgUpdateCounter + (wgUpdateFreq * 1000)) || (_ms < wgUpdateCounter ))
   {
     // time to send updates to WindGuru
-    wgUpdateCounter = millis();
+    wgUpdateCounter = _ms;
     windAvg = windTot / ( wgUpdateFreq / davisUpdateFreq );
     Serial.println("windAvg="+String(windAvg,1)+" from "+String(windTot)+" / ("+String(wgUpdateFreq)+" / "+String(davisUpdateFreq)+")");
 
     getSensors();
     SendToWindguru();
 
-    windMin = 0;  windAvg = 0;  windMax = 0; windTot = 0;
+    windMin = 99;  windAvg = 0;  windMax = 0; windTot = 0;
+    totRotations = 0;
 
   }   // endif millis > sampling period
 
@@ -828,11 +837,6 @@ float getKnotsFromMS(float speed) {
 return speed * 1.94384;
 } // end getKnotsFromMS
 
-// Determine if wind speed is good in range of knots from 0 to 150 kts.  Note 0 could be suspicuous
-bool validateWind(float functWind) {
-  if (functWind == 0 || functWind < 0 || functWind > 150) return false; else return true;
-} // end validateWind
-
 
 // Module to get key weather metrics from the OpenWeather.com API, to use for backup readings.
 void GetInternetWeather(String apiKey, String Latitude, String Longitude)
@@ -899,7 +903,6 @@ void GetInternetWeather(String apiKey, String Latitude, String Longitude)
                owDirection = _wind_deg;
                owWindAvg = _wind_speed;
                if (_wind_gust > _wind_speed) owWindMax = _wind_gust; else owWindMax = _wind_speed;
-               owWindMin = 0.0;
 
                /// send ow weather spot reading to MQTT
                if (debugLevel > 0)
@@ -944,7 +947,7 @@ bool SendToWindguru()
       //wind_speeds - avg, min, max in Knots
       getData = getData + "&wind_avg=" + String(windAvg, 1);
       if (windMax != windAvg) getData = getData + "&wind_max=" + String(windMax, 1);
-      if (windMin != windAvg) getData = getData + "&wind_min=" + String(windMin, 1);
+      if (windMin != 0  && windMin != windAvg) getData = getData + "&wind_min=" + String(windMin, 1);
 
       //wind_direction; wind direction as degrees (0 = north, 90 east etc...)
       getData = getData + "&wind_direction=" + String(direction);
