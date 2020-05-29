@@ -754,6 +754,9 @@ void timedTasks()
     Serial.println("windAvg="+String(windAvg,1)+" from "+String(windTot)+" / ("+String(wgUpdateFreq)+" / "+String(davisUpdateFreq)+")");
 
     getSensors();
+    
+    if (requestRestart > 1) requestRestart--;
+
     SendToWindguru();
 
     windMin = 99;  windAvg = 0;  windMax = 0; windTot = 0;
