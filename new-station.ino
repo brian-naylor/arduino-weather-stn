@@ -1,7 +1,7 @@
 /*
   New Weather Station - Arduino code
-  Version:  3.0.529 beta
-  Date:     29th May, 2020
+  Version:  3.0.530 beta
+  Date:     30th May, 2020
   Author:   Brian Naylor
   Source:   (to be posted) https://github.com/brian.naylor/arduino/weather-station
 
@@ -40,16 +40,16 @@
 #include <Adafruit_BME280.h>            // https://github.com/adafruit/Adafruit_BME280_Library
 
 // setup PIN mapping for devices
-#define WindSensorPin (14)              // The pin location of the anemometer sensor / GPIO14 (D5 for NodeMcu)
-#define WindVanePin (A0)                // The pin the wind vane sensor is connected to
+#define WINDPIN 14                      // The pin location of the anemometer sensor / GPIO14 (D5 for NodeMcu)
+#define VANEPIN (A0)                    // The pin the wind vane sensor is connected to
 #define LED 2
 
 // globals
-#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.529 OTA -----------------"
+#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.530 OTA -----------------"
 #define NameAP      "WindStationAP"
 #define PasswordAP  "87654321"
-int wifiRetries = 10;             // number of times to retry wifi reconnection
-int requestRestart = 0;           // request the restart of the Arduino
+unsigned int wifiRetries = 10;             // number of times to retry wifi reconnection
+unsigned int requestRestart = 0;           // request the restart of the Arduino
 bool shouldSaveConfig = false;    //flag for saving data to config.json
 
 const char* otaUpdateBinary = "https://mksc.org.uk/wp-content/bin/mkscwgstn.bin";
@@ -70,50 +70,50 @@ char vaneOffset[4] = "0";                                   // define the offset
 char owApiKey[34] = "cc7d2795579e3f511f0c6abde97ea100";     // API key for openweathermap
 char owLat[10] = "52.0059";                                 // Latitude for openweathermap readings eg. "52.0059"
 char owLong[10] = "-0.7028";                                // Longtitude for openweathermap readings eg. "-0.7028"
-int ELEVATION = 65;                                         // Height of your weather station above sea level (in meters)
+unsigned int ELEVATION = 65;                                         // Height of your weather station above sea level (in meters)
 
 // MQTT topic definitions & globals
-#define MQTT_TOPIC      "mkscwgstn"        // mqtt topic (Must be unique for each device)
-#define MQTT_TOPICc     "mkscwgstn/c"      // wind correction for speed calibration
-#define MQTT_TOPICv     "mkscwgstn/v"      // vane offset for direction calibration
-#define MQTT_TOPICw     "mkscwgstn/w"      // wind source - either device/probe or Internet
-#define MQTT_TOPICt     "mkscwgstn/t"      // temp source - either device/probe or Internet
-#define MQTT_TOPICp     "mkscwgstn/p"      // pressure source - either device/probe or Internet
-#define MQTT_TOPICu     "mkscwgstn/u"      // upload readings to WindGuru - on or off
-#define MQTT_TOPICf     "mkscwgstn/f"      // flash Arduino with new code.
-#define MQTT_TOPICr     "mkscwgstn/r"      // reset / reboot Arduino
-#define MQTT_TOPICd     "mkscwgstn/d"      // debugging level sent to MQTT
+#define MQTT_TOPIC      "mkscwgstn"         // mqtt topic (Must be unique for each device)
+#define MQTT_TOPICc     "mkscwgstn/c"       // wind correction for speed calibration
+#define MQTT_TOPICv     "mkscwgstn/v"       // vane offset for direction calibration
+#define MQTT_TOPICw     "mkscwgstn/w"       // wind source - either device/probe or Internet
+#define MQTT_TOPICt     "mkscwgstn/t"       // temp source - either device/probe or Internet
+#define MQTT_TOPICp     "mkscwgstn/p"       // pressure source - either device/probe or Internet
+#define MQTT_TOPICu     "mkscwgstn/u"       // upload readings to WindGuru - on or off
+#define MQTT_TOPICf     "mkscwgstn/flash"   // flash Arduino with new code.
+#define MQTT_TOPICr     "mkscwgstn/reset"   // reset / reboot Arduino
+#define MQTT_TOPICd     "mkscwgstn/d"       // debugging level sent to MQTT
 
 //Variables to hold good/true weather metrics and variables from open weather.
 float temperature = 0, pressure = 0, humidity = 0, mslp = 0;
 float owTemp = 0, owPressure = 0, owHumidity = 0, owWindAvg = 0, owWindMax = 0;
 float windAvg = 0, windMax = 0, windMin = 999, windTot = 0;
-int direction = 0, owDirection = 0;
+unsigned int direction = 0, owDirection = 0;
 
 //Variables defining the source of the weather metrics - note if primary source is invalid, alternate will be used.
-int sourceWind = 0;                         // 0 = Davis Anemometer (default) ; 1 = OpenWeather
-int sourceDir = 1;                          // 0 = Davis Anemometer (default) ; 1 = OpenWeather
-int sourceTemp = 1;                         // 0 = DS1280B probe (default) ; 1 = OpenWeather; 2 = Alternative probe / BME280
-int sourcePressure = 0;                     // 0 = BME280 (default); 1 = OpenWeather
-int sourceHumidity = 0;                     // 0 = BME280 (default); 1 = OpenWeather
+unsigned int sourceWind = 0;                         // 0 = Davis Anemometer (default) ; 1 = OpenWeather
+unsigned int sourceDir = 1;                          // 0 = Davis Anemometer (default) ; 1 = OpenWeather
+unsigned int sourceTemp = 1;                         // 0 = DS1280B probe (default) ; 1 = OpenWeather; 2 = Alternative probe / BME280
+unsigned int sourcePressure = 0;                     // 0 = BME280 (default); 1 = OpenWeather
+unsigned int sourceHumidity = 0;                     // 0 = BME280 (default); 1 = OpenWeather
 
 
 // Timer Variables and wind counters
-volatile unsigned long rotations;           // cup rotation counter used in interrupt routine
-volatile unsigned long totRotations;        // aggregated cup rotation counter used in interrupt routine
-volatile unsigned long contactBounceTime;   // Timer to avoid contact bounce in isr
+unsigned long rotations;                    // cup rotation counter used in interrupt routine
+unsigned long totRotations;                 // aggregated cup rotation counter used in interrupt routine
+unsigned long contactBounceTime;            // Timer to avoid contact bounce in isr
 unsigned long timerCount;                   // counter to track elapsed millisecs
-unsigned long davisUpdateFreq = 5;          // update frequency to sample wind from Davis Anemometer (in seconds)
-unsigned long wgUpdateFreq = 60;            // update interval in seconds for WindGuru (UPLOAD) (in seconds)
+unsigned long davisUpdateFreq = 10;         // update frequency to sample wind from Davis Anemometer (in seconds)
+unsigned long wgUpdateFreq = 120;           // update interval in seconds for WindGuru (UPLOAD) (in seconds)
 unsigned long wgUpdateCounter = 0;          // counter to track progress against update interval for WindGuru
-unsigned long owUpdateFreq = 5;             // update interval in minutes for OpenWeather API (DOWNLOAD)  (in minutes)
+unsigned long owUpdateFreq = 5;             // update interval for OpenWeather API (DOWNLOAD)  (update every X times WG updates)
 unsigned long owUpdateCounter = 99;         // counter to track progress against update interval
 float windSpeed;                            // speed miles per hour
 float correction;                           // Correction factor applied to wind speed for adjustment
 
 
 // Debugging variable
-int debugLevel = 1;                         // 0=off; 1=informational; 2;=extensive/mqtt; 3=verbose/mqtt
+unsigned int debugLevel = 1;                         // 0=off; 1=informational; 2;=extensive/mqtt; 3=verbose/mqtt
 
 
 //Sensor variables
@@ -179,18 +179,22 @@ void callback(const MQTT::Publish& pub) {
     switch (atoi(payload.c_str())) {
       case 0:
         Serial.println(" OFF");
+        sendMQTTmsg(MQTT_TOPIC"/debug","Setting DEBUG level to 0 - OFF");
         debugLevel=0;
         break;
       case 1:
         Serial.println(" ON / INFORMATIONAL");
+        sendMQTTmsg(MQTT_TOPIC"/debug","Setting DEBUG level to 1 - INFORMATIONAL");
         debugLevel=1;
         break;
       case 2:
         Serial.println(" EXTENSIVE");
+        sendMQTTmsg(MQTT_TOPIC"/debug","Setting DEBUG level to 2 - EXTENSIVE");
         debugLevel=2;
         break;
       case 3:
         Serial.println(" VERBOSE");
+        sendMQTTmsg(MQTT_TOPIC"/debug","Setting DEBUG level to 3 - VERBOSE");
         debugLevel=3;
         break;
      }  // end case
@@ -203,14 +207,17 @@ void callback(const MQTT::Publish& pub) {
      switch (atoi(payload.c_str())) {
        case 0:
          Serial.println(" DS1280B");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching temperature source to DS1280B");
          sourceTemp = 0;
          break;
        case 1:
          Serial.println(" OpenWeather");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching temperature source to OpenWeather");
          sourceTemp = 1;
          break;
        case 2:
          Serial.println(" BME280");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching temperature source to BME280");
          sourceTemp = 2;
          break;
       }  // end case
@@ -222,10 +229,12 @@ void callback(const MQTT::Publish& pub) {
      switch (atoi(payload.c_str())) {
        case 0:  // David Anemometer
          Serial.println(" Davis Anemometer");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching Wind speed source to Davis Anemometer");
          sourceWind = 0;
          break;
        case 1:
          Serial.println(" OpenWeather");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching Wind speed source to OpenWeather");
          sourceWind = 1;
          break;
       }  // end case
@@ -237,10 +246,12 @@ void callback(const MQTT::Publish& pub) {
      switch (atoi(payload.c_str())) {
        case 0:  // Adafruit_BME280
          Serial.println(" BME280");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching pressure source to BME280");
          sourcePressure = 0;
          break;
        case 1:
          Serial.println(" OpenWeather");
+         sendMQTTmsg(MQTT_TOPIC"/debug","Switching pressure source to OpenWeather");
          sourcePressure = 1;
          break;
       }  // end case
@@ -365,7 +376,7 @@ void setup()
 
         // setup LEDs
         pinMode(LED, OUTPUT);
-        pinMode(WindSensorPin, INPUT_PULLUP);
+        pinMode(WINDPIN, INPUT_PULLUP);
         digitalWrite(LED, HIGH);
 
         // connect inbound MQTT topics and payloads to processing function
@@ -521,17 +532,21 @@ void checkConnection()
 // check to see if restart / reboot required
 void checkRestartStatus() {
   if (requestRestart == 1) {
+    sendMQTTmsg(MQTT_TOPIC"/debug", "Restarting device...");
     //blinkLED(LED, 400, 4);
     ESP.restart();
     delay(500);
   }
 }
 
-// NOT SURE - CHECK THIS OUT
-void ICACHE_RAM_ATTR windcount() {
-  if((long)(micros() - contactBounceTime) > 15 ) {
+// Count rotations when interupt pin is fired
+void ICACHE_RAM_ATTR windcount()
+{
+  unsigned long _time;
+  _time = micros();
+  if ((_time - contactBounceTime) > 15 ) {
     rotations++;
-    contactBounceTime = millis();
+    contactBounceTime = _time;
     digitalWrite(LED, !digitalRead(LED));
   }
 }
@@ -556,10 +571,10 @@ void setupSensors()
   rotations = 0;    // Set Rotations to 0 ready for calculations
   totRotations = 0;
   correction = (float) atoi(wind_correction) / 100.0;       // Convert % wind_correction into fraction
-  pinMode(WindSensorPin, INPUT);
+  //pinMode(WINDPIN, INPUT);
 
-  //call windcount() when interupt on WindSensorPin fires.  Increaments 'rotation' counter.
-  attachInterrupt(WindSensorPin, windcount, FALLING);
+  //call windcount() when interupt on WINDPIN fires.  Increaments 'rotation' counter.
+  attachInterrupt(WINDPIN, windcount, FALLING);
 
   GetInternetWeather(owApiKey, owLat, owLong);     // Get Internet weather from OpenWeather API
 
@@ -648,7 +663,7 @@ int getWindDirection()
 
   switch (sourceDir) {
     case 0: // Davis Wind vane
-      _direction = map(analogRead(WindVanePin), 0, 1023, 0, 359);
+      _direction = map(analogRead(VANEPIN), 0, 1023, 0, 359);
       Serial.println("_direction 0 :"+String(_direction));
       _calDirection = _direction + atoi(vaneOffset);
 
@@ -713,13 +728,11 @@ void timedTasks()
 
   _ms = millis(); //get the current time now in milli-secs
 
-  if ((_ms > timerCount + (davisUpdateFreq * 1000)) || (_ms < timerCount ))
+  if ((_ms > (timerCount + (davisUpdateFreq * 1000))) || (_ms < timerCount ))
   {
     // time to calculate wind speed from the rotations in the davisUpdateFreq period
     _elapsedMS = _ms - timerCount;        // How much time has elapsed since last reading
     timerCount = _ms;
-
-    Serial.println("Millis: "+String(_elapsedMS) + " timerCount: " + String(timerCount));   //MORE DEBUG
 
     // convert to mp/h using the formula V=P(2.25/T)
     _windFactor = 2250 / _elapsedMS;
@@ -732,7 +745,8 @@ void timedTasks()
     {
       _logMsg = _logMsg + " in " + String((_elapsedMS / 1000), 2) + " secs " + " W=" + String(windSpeed,2) + "knots @ " + String((correction*100),2) + "%";
       Serial.println(_logMsg);
-      if (debugLevel > 1)  sendMQTTmsg(MQTT_TOPIC"/debug", _logMsg);
+      Serial.println("Millis: "+String(_elapsedMS) + " timerCount: " + String(_ms));   //MORE DEBUG
+      if (debugLevel > 1)  sendMQTTmsg(MQTT_TOPIC"/debug", _logMsg + " millis:" + String(_elapsedMS) + " timerCount: " + String(_ms) );
     }
 
     // flash LED
@@ -746,7 +760,7 @@ void timedTasks()
 
   }   // endif millis > sampling period
 
-  if ((_ms > wgUpdateCounter + (wgUpdateFreq * 1000)) || (_ms < wgUpdateCounter ))
+  if ((_ms > (wgUpdateCounter + (wgUpdateFreq * 1000))) || (_ms < wgUpdateCounter ))
   {
     // time to send updates to WindGuru
     wgUpdateCounter = _ms;
@@ -754,8 +768,12 @@ void timedTasks()
     Serial.println("windAvg="+String(windAvg,1)+" from "+String(windTot)+" / ("+String(wgUpdateFreq)+" / "+String(davisUpdateFreq)+")");
 
     getSensors();
-    
-    if (requestRestart > 1) requestRestart--;
+
+    if (requestRestart > 1)
+    {
+      requestRestart--;
+      sendMQTTmsg(MQTT_TOPIC"/debug", "Request to Restart device..." + String(requestRestart));
+    }
 
     SendToWindguru();
 
@@ -789,6 +807,7 @@ void blinkLED(int pin, int duration, int n) {
 void ota_update()
 {
   Serial.println("Loading OTA update");
+  sendMQTTmsg(MQTT_TOPIC"/debug","Requesting OTA update.");
   ESPhttpUpdate.onStart(ota_update_started);
   ESPhttpUpdate.onEnd(ota_update_finished);
   ESPhttpUpdate.onProgress(ota_update_progress);
@@ -800,6 +819,7 @@ void ota_update()
   {
     case HTTP_UPDATE_FAILED:
       Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+      sendMQTTmsg(MQTT_TOPIC"/debug","OTA update error.");
       break;
 
     case HTTP_UPDATE_NO_UPDATES:
