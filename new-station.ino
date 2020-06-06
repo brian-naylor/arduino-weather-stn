@@ -1,7 +1,7 @@
 /*
   New Weather Station - Arduino code
-  Version:  3.0.530 beta
-  Date:     30th May, 2020
+  Version:  3.0.606 beta
+  Date:     6th June, 2020
   Author:   Brian Naylor
   Source:   (to be posted) https://github.com/brian.naylor/arduino/weather-station
 
@@ -45,7 +45,7 @@
 #define LED 2
 
 // globals
-#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.530 OTA -----------------"
+#define VERSION     "\n\n-----------------  MKSC Wind Station v3.0.606 OTA -----------------"
 #define NameAP      "WindStationAP"
 #define PasswordAP  "87654321"
 unsigned int wifiRetries = 10;             // number of times to retry wifi reconnection
@@ -91,16 +91,17 @@ float windAvg = 0, windMax = 0, windMin = 999, windTot = 0;
 unsigned int direction = 0, owDirection = 0;
 
 //Variables defining the source of the weather metrics - note if primary source is invalid, alternate will be used.
-unsigned int sourceWind = 0;                         // 0 = Davis Anemometer (default) ; 1 = OpenWeather
-unsigned int sourceDir = 1;                          // 0 = Davis Anemometer (default) ; 1 = OpenWeather
-unsigned int sourceTemp = 1;                         // 0 = DS1280B probe (default) ; 1 = OpenWeather; 2 = Alternative probe / BME280
-unsigned int sourcePressure = 0;                     // 0 = BME280 (default); 1 = OpenWeather
-unsigned int sourceHumidity = 0;                     // 0 = BME280 (default); 1 = OpenWeather
+unsigned int sourceWind = 0;                // 0 = Davis Anemometer (default) ; 1 = OpenWeather
+unsigned int sourceDir = 1;                 // 0 = Davis Anemometer (default) ; 1 = OpenWeather
+unsigned int sourceTemp = 1;                // 0 = DS1280B probe (default) ; 1 = OpenWeather; 2 = Alternative probe / BME280
+unsigned int sourcePressure = 0;            // 0 = BME280 (default); 1 = OpenWeather
+unsigned int sourceHumidity = 0;            // 0 = BME280 (default); 1 = OpenWeather
 
 
 // Timer Variables and wind counters
 unsigned long rotations;                    // cup rotation counter used in interrupt routine
 unsigned long totRotations;                 // aggregated cup rotation counter used in interrupt routine
+unsigned long zeroReadingCounter = 0;       // How many consequtive times, we get a zero wind reading (indicating sensor problem)
 unsigned long contactBounceTime;            // Timer to avoid contact bounce in isr
 unsigned long timerCount;                   // counter to track elapsed millisecs
 unsigned long davisUpdateFreq = 10;         // update frequency to sample wind from Davis Anemometer (in seconds)
@@ -113,7 +114,7 @@ float correction;                           // Correction factor applied to wind
 
 
 // Debugging variable
-unsigned int debugLevel = 1;                         // 0=off; 1=informational; 2;=extensive/mqtt; 3=verbose/mqtt
+unsigned int debugLevel = 1;                // 0=off; 1=informational; 2;=extensive/mqtt; 3=verbose/mqtt
 
 
 //Sensor variables
@@ -483,7 +484,6 @@ void setup()
           {
             Serial.println(". MQTT connected");
             sendMQTTmsg(MQTT_TOPIC"/debug", "Compiled: " __DATE__ " / " __TIME__);
-            //mqttClient.publish(MQTT::Publish(MQTT_TOPIC"/debug", "Compiled: " __DATE__ " / " __TIME__).set_retain().set_qos(1));
 
             //  Subscribe to topics for inbound messages
             mqttClient.subscribe(MQTT_TOPIC );
@@ -571,7 +571,6 @@ void setupSensors()
   rotations = 0;    // Set Rotations to 0 ready for calculations
   totRotations = 0;
   correction = (float) atoi(wind_correction) / 100.0;       // Convert % wind_correction into fraction
-  //pinMode(WINDPIN, INPUT);
 
   //call windcount() when interupt on WINDPIN fires.  Increaments 'rotation' counter.
   attachInterrupt(WINDPIN, windcount, FALLING);
@@ -740,6 +739,17 @@ void timedTasks()
     totRotations = totRotations + rotations ;
     setWindRange(windSpeed); // calculate min and max variance in wind
     _logMsg = "R=" + String(rotations) + "/" + String(totRotations) ;
+
+    if (rotations == 0 && totRotations == 0) // check to see if there have been multiple zero wind readings
+    {
+      zeroReadingCounter++;
+      if (zeroReadingCounter > 20)  requestRestart = 0; //after 20 consequtive zero readings, initiate a Reset
+    }
+    else
+    {
+      zeroReadingCounter = 0
+    }
+
     rotations = 0; // Reset count for next sample
     if (debugLevel > 0)
     {
